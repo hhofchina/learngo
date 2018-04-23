@@ -1,0 +1,104 @@
+syntax = "proto3";
+
+option go_package = "md";
+option java_multiple_files = true;
+option java_package = "com.md.order";
+option java_outer_classname = "OrderProto";
+//默认不为py生成service代码，设置成true生成
+option py_generic_services = true;
+
+package order;
+
+//服务
+service OrderService {
+    //查订单
+    rpc GetOrder (OrderReq)          returns (OrderRsp) ;         
+    //双向多数据查订单
+    rpc ListOrder (stream OrderReq)  returns (stream OrderRsp) ;
+    //生成订单
+    rpc NewOrder (OrderReq)          returns (OrderRsp) ;          
+    //取消订单
+    rpc CancelOrder (OrderReq)       returns (OrderRsp) ;          
+    //查可用库存
+    rpc CheckStock (StockReq)        returns (StockRsp) {}          
+    //锁定库存
+    rpc LockStock (StockReq)         returns (StockRsp) {}          
+    //解锁恢复库存
+    rpc UnlockStock (StockReq)       returns (StockRsp) {}          
+    //抢购排队入队列
+    rpc QueuePush (QueueReq)         returns (QueueRsp) {}          
+    //抢购出队列
+    rpc QueuePop (QueueReq)          returns (QueueRsp) {}          
+    
+} 
+
+//订单请求
+message OrderReq {
+    int32 id = 1;
+    int32 user_id = 102;
+    int32 pro_id = 103;
+    int32 wds_id = 104;
+    int32 rew_id = 105;
+    string md_play = 109;
+    int32 address_id = 110;
+    Address address = 111;
+}
+
+//订单响应
+message OrderRsp {
+    message OrderResult {
+        int32 id = 1;
+        int32 user_id = 2;
+        int32 pro_id = 3;
+        int32 status = 4;
+        float amount = 5;
+        int32 if_pay = 6;
+        string game_code=20;
+    }
+    repeated OrderResult orders = 1;
+}
+
+//收货地址
+message Address {
+    int32 id = 1;
+    string name =2;
+    string province=3;
+    string city=4;
+    string detail=5;
+    string mobile=6;
+    string email=7;
+    string description=8;
+}
+
+//库存请求
+message StockReq {
+    int32 pro_id = 1;
+    int32 lock = 4;
+    int32 unlock = 5;
+}
+
+//库存响应
+message StockRsp {
+    int32 pro_id = 1;
+    int32 stock = 2;
+    int32 total = 101;
+    int32 lock = 102;
+    int32 unlock = 103;
+}
+
+//排队请求
+message QueueReq {
+    int32 user_id = 1;
+    int32 pro_id = 2;
+    int32 qid = 101;
+    float weight = 102;//权重
+    int32 total = 103;
+}
+
+//排队响应
+message QueueRsp {
+    int32 qid = 1;
+    int32 user_id = 2;
+    int32 pro_id = 3;
+    float weight = 4;
+}
