@@ -419,6 +419,7 @@ type Movie struct {
 	Id   int32  `json:"id"`
 	Name string `json:"name"`
 	Man  bool   `json:"man,omitempty"` //“零”值，空串、0、false不输出
+	Sex  int32  `json:"-"` // - 忽略
 }
 
 func testJson() {
