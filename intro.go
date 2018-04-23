@@ -474,7 +474,7 @@ func perr(err error) {
 
 func testMysql() {
 	//datasource 格式：[username[:password]@][protocol[(address)]]/dbname[?param1=value1&...&paramN=valueN]
-	db, err := sql.Open("mysql", "modian:123456@tcp(localhost:3306)/laraveldb?charset=utf8")
+	db, err := sql.Open("mysql", "user:pass@tcp(localhost:3306)/laraveldb?charset=utf8")
 	perr(err)
 	defer db.Close()
 	err = db.Ping()

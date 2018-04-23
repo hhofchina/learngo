@@ -50,7 +50,7 @@ func Notempty(in []os.FileInfo) []os.FileInfo {
 }
 
 func main() {
-	dir, err := os.Open("C:\\Users\\modian\\Downloads")
+	dir, err := os.Open("C:\\Users\\haohao\\Downloads")
 	defer dir.Close()
 	if err != nil {
 		panic(err)
