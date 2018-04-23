@@ -15,10 +15,7 @@ import (
 	"sort"
 	"sync"
 	"time"
-	"golang.org/x/net/context"
-
 	_ "github.com/go-sql-driver/mysql"
-
 	"database/sql"
 	"runtime"
 	"reflect"
@@ -308,7 +305,9 @@ func rpcclient() {
 func testRpc() {
 	go rpcserver()
 	time.Sleep(time.Second * 3)
-	go rpcclient()
+	for i:=0;i<10;i++ {
+		go rpcclient()
+	}
 	var input string
 	fmt.Scanln(&input)
 }
@@ -419,7 +418,6 @@ type Movie struct {
 	Id   int32  `json:"id"`
 	Name string `json:"name"`
 	Man  bool   `json:"man,omitempty"` //“零”值，空串、0、false不输出
-	Sex  int32  `json:"-"` // - 忽略
 }
 
 func testJson() {
@@ -472,14 +470,62 @@ func perr(err error) {
 	}
 }
 
-func testMysql() {
+func connectDb() (*sql.DB, error) {
 	//datasource 格式：[username[:password]@][protocol[(address)]]/dbname[?param1=value1&...&paramN=valueN]
-	db, err := sql.Open("mysql", "user:pass@tcp(localhost:3306)/laraveldb?charset=utf8")
+	return sql.Open("mysql", "root:123456@tcp(172.28.103.29:5000)/haodb?charset=utf8");
+}
+
+func testMysqlConnect() {
+	db, err := connectDb()
 	perr(err)
 	defer db.Close()
 	err = db.Ping()
 	perr(err)
 	fmt.Println("ping ok")
+}
+
+func testMysqlPrepare() {
+	db, err := connectDb()
+	perr(err)
+	defer db.Close()
+
+	stmtIns, err := db.Prepare("INSERT INTO users(name) VALUES(?)")
+	perr(err)
+	defer stmtIns.Close()
+
+	for i := 0; i < 10; i++ {
+		rs,err := stmtIns.Exec(fmt.Sprintf("name_test_%d",i))
+		perr(err)
+		id,err := rs.LastInsertId();perr(err)
+		fmt.Printf("INSERTED id:%d\n",id)
+	}
+
+	stmtOut, err := db.Prepare("SELECT  id FROM users WHERE name=?")
+	perr(err)
+	defer stmtOut.Close()
+
+	var id int64
+	for i := 0; i < 10; i++ {
+		err = stmtOut.QueryRow(fmt.Sprintf("name_test_%d",i)).Scan(&id)
+		perr(err)
+		fmt.Printf("SELECTED id is: %d\n", id)
+	}
+
+	stmtDel, err := db.Prepare("DELETE  FROM users WHERE name=?")
+	perr(err)
+	defer stmtOut.Close()
+	for i := 0; i < 10; i++ {
+		rs,err := stmtDel.Exec(fmt.Sprintf("name_test_%d",i))
+		perr(err)
+		id,err := rs.RowsAffected();perr(err)
+		fmt.Printf("DELETED: %d  rows\n", id)
+	}
+}
+
+func testMysqlMeta() {
+	db, err := connectDb()
+	perr(err)
+	defer db.Close()
 	stmtOut, err := db.Prepare("SELECT count(*) FROM users WHERE id>?")
 	perr(err)
 	defer stmtOut.Close()
@@ -700,7 +746,7 @@ func testMemSync() {
 }
 
 //函数类型，用于传入抓取函数
-type Func func(key string) (interface{}, error)
+type Func func(key string, data string) (interface{}, error)
 
 //结果
 type result struct {
@@ -717,6 +763,7 @@ type entry struct {
 //请求
 type request struct {
 	key      string        //key：url
+	data     string        // data
 	response chan<- result //结果chan，存放处理结果
 }
 
@@ -734,11 +781,18 @@ func New(f Func) *Memo {
 }
 
 //向任务项的请求通道发送请求，读取响应
-func (memo *Memo) Get(key string) (interface{}, error) {
+func (memo *Memo) Get(key string, data string) (interface{}, error) {
 	response := make(chan result)
-	memo.requests <- request{key, response} //向通道发送请求+结果返回通道，等待服务响应
-	time.Sleep(time.Millisecond * 1000)     //强制拖延时间
-	res := <-response                       //等待结果
+	memo.requests <- request{key, data, response} //向通道发送请求+结果返回通道，等待服务响应
+	time.Sleep(time.Millisecond * 1000)           //强制拖延时间
+	res := <-response                             //等待结果
+	return res.value, res.err
+}
+func (memo *Memo) Post(key string, data string) (interface{}, error) {
+	response := make(chan result)
+	memo.requests <- request{key, data, response} //向通道发送请求+结果返回通道，等待服务响应
+	time.Sleep(time.Millisecond * 1000)           //强制拖延时间
+	res := <-response                             //等待结果
 	return res.value, res.err
 }
 
@@ -761,7 +815,7 @@ func (memo *Memo) server(f Func) {
 			e = &entry{ready: make(chan struct{})}
 			cache[req.key] = e
 			fmt.Println("fetching:", req.key)
-			go e.call(f, req.key) //异步执行抓取任务
+			go e.call(f, req.key, req.data) //异步执行抓取任务
 		}
 		//异步返回结果，可能会阻塞等待结果
 		go e.deliver(req.response)
@@ -770,8 +824,8 @@ func (memo *Memo) server(f Func) {
 }
 
 //调用传入的函数（抓取）
-func (e *entry) call(f Func, key string) {
-	e.res.value, e.res.err = f(key)
+func (e *entry) call(f Func, key string, data string) {
+	e.res.value, e.res.err = f(key, data)
 	close(e.ready) //通知抓取完成
 }
 
@@ -782,8 +836,17 @@ func (e *entry) deliver(response chan<- result) {
 }
 
 //执行http Get请求抓取网页，返回为interface{}，让返回更自由
-func httpGetBody(url string) (interface{}, error) {
+func httpGetBody(url string, data string) (interface{}, error) {
 	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return ioutil.ReadAll(resp.Body)
+}
+
+func httpPostBody(url string, data string) (interface{}, error) {
+	resp, err := http.Post(url, "application/json;charset=utf-8", strings.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
@@ -798,15 +861,14 @@ func testFetchUrl() {
 	urls := []string{"http://www.baidu.com"}
 	wg := sync.WaitGroup{}
 	m := New(httpGetBody)
-	defer m.Close()
-	for i := 0; i < 50000; i++ {
+	for i := 0; i < 5000; i++ {
 		for _, url := range urls {
 			wg.Add(1)
 			//并发发送抓取请求
 			go func(url string, i int) {
 				defer wg.Done()
 				start := time.Now()
-				value, err := m.Get(url)
+				value, err := m.Get(url, "")
 				if err != nil {
 					log.Print(err)
 				} else {
@@ -818,6 +880,31 @@ func testFetchUrl() {
 	}
 	wg.Wait()
 	fmt.Printf("\nFetch end")
+}
+
+func testPostUrl() {
+	urls := []string{"http://www.baidu.com"}
+	wg := sync.WaitGroup{}
+	m := New(httpGetBody)
+	for i := 0; i < 5000; i++ {
+		for _, url := range urls {
+			wg.Add(1)
+			//并发发送抓取请求
+			go func(url string, i int) {
+				defer wg.Done()
+				start := time.Now()
+				value, err := m.Post(url, "{'hello':'world'}")
+				if err != nil {
+					log.Print(err)
+				} else {
+					//os.Stdout.Write(value.([]byte))
+					fmt.Printf("\r%10d\turl:%s\t%d bytes\ttime:%s", i, url, len(value.([]byte)), time.Since(start))
+				}
+			}(url, i)
+		}
+	}
+	wg.Wait()
+	fmt.Printf("\nPost end")
 }
 
 //测试并发可以承受的goroutine数目
@@ -884,35 +971,24 @@ func testChannel() {
 	}
 }
 
-func testContextTimeOut() {
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-
-	select {
-	case <-time.After(1 * time.Second):
-		fmt.Println("overslept")
-	case <-ctx.Done():
-		fmt.Println(ctx.Err()) // prints "context deadline exceeded"
-	}
-}
-
-func testMapInit() {
+func testMapEntry() {
 	type tt struct {
 		id string
 	}
 	v := make(map[string]tt)
-	//v := map[string]tt{} // 相当于前面一行
 	v["234"] = tt{"234"}
 	if _, ok := v["123"]; !ok {
 		fmt.Print("not found")
 	}
 }
-
 func main() {
 	defer printStack()
 	defer usetime("Main")()
 	//testFetchUrl()
+	//testPostUrl()
 	//testChannel()
-	//testRpc()
-	testContextTimeOut()
+	testRpc()
+	//testMapEntry()
+	//testMysqlMeta()
+	//testMysqlPrepare()
 }
