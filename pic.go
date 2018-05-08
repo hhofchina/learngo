@@ -13,7 +13,6 @@ import (
 	"github.com/rwcarlsen/goexif/exif"
 	"github.com/rwcarlsen/goexif/mknote"
 	"sync"
-	"google.golang.org/genproto/googleapis/devtools/cloudbuild/v1"
 )
 
 //读取图片时间
@@ -91,6 +90,7 @@ func Process(f string) {
 }
 
 func main() {
+	var sema = make(chan struct{}, 20) // control most concurrent goroutines
 	fm := map[string]string{
 		"JPG": "JPG", "JPEG": "JPEG",
 		"NEF": "NEF", "ARW": "ARW", "CR2": "CR2",
@@ -98,55 +98,44 @@ func main() {
 	defer func() {
 		fmt.Println("运行结束")
 	}()
+	wg := sync.WaitGroup{}
 	if len(os.Args) > 1 {
 		for _, f := range os.Args[1:] {
-			if _, ok := fm[strings.ToUpper(f[strings.LastIndex(f, ".")+1:])]; ok {
-				//ReadPic(f)
-				Process(f)
-			} else {
-				fmt.Println("忽略非图文件：", f)
-			}
+			wg.Add(1)
+			go func(file string) {
+				defer wg.Done()
+				if _, ok := fm[strings.ToUpper(file[strings.LastIndex(file, ".")+1:])]; ok {
+					sema <- struct{}{}
+					Process(file)
+					defer func() { <-sema }()
+				} else {
+					fmt.Println("忽略非图文件：", file)
+				}
+			}(f)
 		}
 	} else {
 		//读当前目录
 		info, _ := ioutil.ReadDir(".")
-		//var files[] string
-		files := make([]string, 1, 10240)
 		for _, fi := range info {
 			if fi.IsDir() || strings.HasPrefix(fi.Name(), ".") {
 				continue
 			}
-			//if strings.HasSuffix(strings.ToUpper(f.Name()), "ARW") || strings.HasSuffix(strings.ToUpper(f.Name()), "JPG") || strings.HasSuffix(strings.ToUpper(f.Name()), "JPEG") || strings.HasSuffix(strings.ToUpper(f.Name()), "NEF") {
-			f := fi.Name()
-			if _, ok := fm[strings.ToUpper(f[strings.LastIndex(f, ".")+1:])]; ok {
-				//Process(f) // 单coroutine顺序处理
-				files = append(files, f)
-			} else {
-				fmt.Println("忽略非图文件：", f)
-			}
-		}
-		done := make(chan bool, 1)
-		fmt.Printf("图片数:%d\n", len(files))
-		//// 并发处理
-		wg := sync.WaitGroup{}
-		//每个图片一个协程
-		for _, f := range files {
 			wg.Add(1)
+			file := fi.Name()
 			go func(f string) {
 				defer wg.Done()
-				Process(f)
-			}(f)
+				//if strings.HasSuffix(strings.ToUpper(f.Name()), "ARW") || strings.HasSuffix(strings.ToUpper(f.Name()), "JPG") || strings.HasSuffix(strings.ToUpper(f.Name()), "JPEG") || strings.HasSuffix(strings.ToUpper(f.Name()), "NEF") {
+				if _, ok := fm[strings.ToUpper(f[strings.LastIndex(f, ".")+1:])]; ok {
+					sema <- struct{}{}
+					Process(f)
+					defer func() { <-sema }()
+				} else {
+					fmt.Println("忽略非图文件：", f)
+				}
+			}(file)
 		}
-		wg.Wait()
-
-		done <- true
-
-		select {
-		case <-done:
-			fmt.Printf("done")
-		}
-		fmt.Println("图片处理结束")
 	}
+	wg.Wait()
 }
 
 //读取图片文件exif信息，支持JPG、NEF、ARW，只有JPG格式才读取宽高信息
@@ -234,3 +223,4 @@ func ReadPic(file string) {
 		fmt.Println(format, conf.Width, "x", conf.Height)
 	}
 }
+
